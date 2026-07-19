@@ -1,3 +1,4 @@
+export default function App() {
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as math from "mathjs";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";

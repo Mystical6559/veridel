@@ -392,6 +392,41 @@ function shadeHex(hex, amount) {
   }
 }
 
+// Uses the Claude-artifact storage API when it's present (previewing inside
+// Claude), and falls back to plain localStorage everywhere else (a real
+// deployed site), so the same file works in both places.
+async function storageGet(key) {
+  try {
+    if (typeof window !== "undefined" && window.storage && typeof window.storage.get === "function") {
+      return await window.storage.get(key);
+    }
+  } catch (e) {
+    // fall through to localStorage
+  }
+  try {
+    const raw = localStorage.getItem(key);
+    return raw !== null ? { key, value: raw } : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function storageSet(key, value) {
+  try {
+    if (typeof window !== "undefined" && window.storage && typeof window.storage.set === "function") {
+      return await window.storage.set(key, value);
+    }
+  } catch (e) {
+    // fall through to localStorage
+  }
+  try {
+    localStorage.setItem(key, value);
+    return { key, value };
+  } catch (e) {
+    return null;
+  }
+}
+
 export default function StudyLedger() {
   const [subjects, setSubjects] = useState([]);
   const [activeTab, setActiveTab] = useState("subjects");
@@ -442,7 +477,7 @@ export default function StudyLedger() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await window.storage.get(STORAGE_KEY);
+        const res = await storageGet(STORAGE_KEY);
         if (res && res.value) {
           const data = JSON.parse(res.value);
           setSubjects(data.subjects || []);
@@ -466,7 +501,7 @@ export default function StudyLedger() {
     if (!loaded) return;
     (async () => {
       try {
-        const result = await window.storage.set(
+        const result = await storageSet(
           STORAGE_KEY,
           JSON.stringify({
             subjects,
@@ -720,16 +755,32 @@ export default function StudyLedger() {
         .slice(firstUserIdx === -1 ? 0 : firstUserIdx)
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          system: systemPrompt,
-          messages: apiMessages,
-        }),
-      });
+      const payload = {
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: apiMessages,
+      };
+
+      // Prefer a same-origin backend proxy (e.g. /api/chat on a real
+      // deployment, which keeps your Anthropic API key server-side).
+      // Falls back to calling Anthropic directly, which only succeeds
+      // when previewing inside a Claude.ai artifact.
+      let response;
+      try {
+        response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (response.status === 404) throw new Error("no-proxy");
+      } catch (e) {
+        response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
 
       const data = await response.json();
 

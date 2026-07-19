@@ -4,7 +4,6 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { Plus, Trash2, Calendar, BookOpen, Clock, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, TrendingUp, Send, Languages, Loader2, Palette, RotateCcw, Timer as TimerIcon, Play, Pause, RefreshCw, Ban, Globe } from "lucide-react";
 
 const STORAGE_KEY = "exam-ledger-v1";
-export default function App() {
 
 const SUGGESTED_SUBJECTS = [
   "Myanmar", "English", "Mathematics", "Physics", "Chemistry",

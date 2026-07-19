@@ -1,5 +1,5 @@
-export default function App() {
 import React, { useState, useEffect, useMemo, useRef } from "react";
+export default function App() {
 import * as math from "mathjs";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Plus, Trash2, Calendar, BookOpen, Clock, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, TrendingUp, Send, Languages, Loader2, Palette, RotateCcw, Timer as TimerIcon, Play, Pause, RefreshCw, Ban, Globe } from "lucide-react";

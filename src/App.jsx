@@ -432,7 +432,7 @@ export default function StudyLedger() {
   const [activeTab, setActiveTab] = useState("subjects");
   const [slotsPerDay, setSlotsPerDay] = useState(3);
   const [primaryColor, setPrimaryColor] = useState("#020617");
-  const [secondaryColor, setSecondaryColor] = useState("#f59e0b");
+  const [secondaryColor, setSecondaryColor] = useState("#01FFFB");
   const [cardColor, setCardColor] = useState("#0f172a");
   const [textColor, setTextColor] = useState("#f5f5f4");
   const [language, setLanguage] = useState("en");

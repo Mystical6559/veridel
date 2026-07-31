@@ -773,9 +773,14 @@ export default function StudyLedger() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-      if (response.status === 404) {
-  throw new Error("API route /api/chat not found");
-}
+        if (response.status === 404) throw new Error("no-proxy");
+      } catch (e) {
+        response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
 
       const data = await response.json();
 

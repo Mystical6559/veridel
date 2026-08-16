@@ -385,6 +385,93 @@ function shadeHex(hex, amount) {
   }
 }
 
+function isValidHex(hex) {
+  return typeof hex === "string" && /^#[0-9a-fA-F]{6}$/.test(hex.trim());
+}
+
+function relativeLuminance(hex) {
+  let c = hex.replace("#", "");
+  if (c.length === 3) c = c.split("").map((ch) => ch + ch).join("");
+  const num = parseInt(c, 16);
+  const [r, g, b] = [(num >> 16) & 255, (num >> 8) & 255, num & 255].map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(hexA, hexB) {
+  const l1 = relativeLuminance(hexA) + 0.05;
+  const l2 = relativeLuminance(hexB) + 0.05;
+  return l1 > l2 ? l1 / l2 : l2 / l1;
+}
+
+// Keeps V's theme edits from ever making the site unreadable: if the
+// requested text color doesn't contrast enough against a background,
+// nudge it toward near-black/near-white instead of rejecting the change.
+function ensureReadableText(bgHex, textHex) {
+  if (!isValidHex(bgHex) || !isValidHex(textHex)) return textHex;
+  if (contrastRatio(bgHex, textHex) >= 4.5) return textHex;
+  return relativeLuminance(bgHex) < 0.4 ? "#f5f5f4" : "#0f172a";
+}
+
+// Tool definitions V (the Gemini-powered assistant) can call mid-conversation.
+// Schemas follow Anthropic's tool-use shape; api/chat.js translates them into
+// Gemini's functionDeclarations format under the hood.
+const V_TOOLS = [
+  {
+    name: "set_theme",
+    description:
+      "Adjust the site's color theme. Only include the colors you actually want to change. Make tasteful, moderate adjustments (e.g. a calmer background, better contrast) rather than a total redesign unless explicitly asked for something dramatic. All values must be 6-digit hex colors like #0f172a.",
+    input_schema: {
+      type: "object",
+      properties: {
+        primaryColor: { type: "string", description: "Page background color, hex" },
+        secondaryColor: { type: "string", description: "Accent color used for buttons/highlights, hex" },
+        cardColor: { type: "string", description: "Card/panel background color, hex" },
+        textColor: { type: "string", description: "Main text color, hex" },
+      },
+    },
+  },
+  {
+    name: "add_graph_function",
+    description: "Plot a function on the graphing calculator tab, e.g. when the student asks what an equation looks like.",
+    input_schema: {
+      type: "object",
+      properties: {
+        expr: { type: "string", description: "Expression in terms of x, e.g. 'sin(x)*x' or 'x^2 - 3'" },
+        xMin: { type: "number", description: "Optional lower bound of the x-axis" },
+        xMax: { type: "number", description: "Optional upper bound of the x-axis" },
+      },
+      required: ["expr"],
+    },
+  },
+  {
+    name: "set_subject_priority",
+    description:
+      "Change how heavily a subject is weighted when the study schedule is built. Use when the student says a subject matters more/less, or is more/less urgent, than the current plan reflects.",
+    input_schema: {
+      type: "object",
+      properties: {
+        subjectName: { type: "string", description: "Name of the subject (or a close match) as already entered by the student" },
+        priority: { type: "integer", description: "1 (lowest) to 5 (highest). 3 is normal/default." },
+      },
+      required: ["subjectName", "priority"],
+    },
+  },
+  {
+    name: "set_slots_per_day",
+    description: "Change how many study sessions are scheduled per day.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slotsPerDay: { type: "integer", description: "Sessions per day, between 1 and 6" },
+      },
+      required: ["slotsPerDay"],
+    },
+  },
+];
+
 async function storageGet(key) {
   try {
     if (typeof window !== "undefined" && window.storage && typeof window.storage.get === "function") {
@@ -527,7 +614,7 @@ export default function StudyLedger() {
     if (!newSubjectName.trim() || !newSubjectDate) return;
     setSubjects((prev) => [
       ...prev,
-      { id: uid(), name: newSubjectName.trim(), examDate: newSubjectDate, chapters: [] },
+      { id: uid(), name: newSubjectName.trim(), examDate: newSubjectDate, chapters: [], priority: 3 },
     ]);
     setNewSubjectName("");
     setNewSubjectDate("");
@@ -535,6 +622,10 @@ export default function StudyLedger() {
 
   const removeSubject = (id) => {
     setSubjects((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const setSubjectPriority = (id, priority) => {
+    setSubjects((prev) => prev.map((s) => (s.id === id ? { ...s, priority } : s)));
   };
 
   const addChapter = (subjectId) => {
@@ -724,6 +815,85 @@ export default function StudyLedger() {
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   })();
 
+  // Executes one tool call V asked for and returns a short text result that
+  // gets fed back to Gemini so it can confirm what happened in its reply.
+  const applyToolCall = (name, input = {}) => {
+    try {
+      switch (name) {
+        case "set_theme": {
+          const next = {};
+          if (isValidHex(input.primaryColor)) next.primaryColor = input.primaryColor;
+          if (isValidHex(input.secondaryColor)) next.secondaryColor = input.secondaryColor;
+          if (isValidHex(input.cardColor)) next.cardColor = input.cardColor;
+          if (isValidHex(input.textColor)) next.textColor = input.textColor;
+          if (Object.keys(next).length === 0) return "No valid hex colors were provided; nothing changed.";
+
+          const bg = next.primaryColor || primaryColor;
+          const card = next.cardColor || cardColor;
+          const requestedText = next.textColor || textColor;
+          const safeText = ensureReadableText(bg, ensureReadableText(card, requestedText));
+
+          if (next.primaryColor) setPrimaryColor(next.primaryColor);
+          if (next.secondaryColor) setSecondaryColor(next.secondaryColor);
+          if (next.cardColor) setCardColor(next.cardColor);
+          if (safeText !== textColor) setTextColor(safeText);
+
+          const applied = { ...next, ...(safeText !== textColor ? { textColor: safeText } : {}) };
+          const adjustedNote = safeText !== requestedText ? " (text color was nudged slightly for readability)" : "";
+          return `Theme updated: ${Object.entries(applied).map(([k, v]) => `${k}=${v}`).join(", ")}.${adjustedNote}`;
+        }
+        case "add_graph_function": {
+          const expr = (input.expr || "").trim();
+          if (!expr) return "No expression was provided; nothing was plotted.";
+          setGraphFns((prev) => [...prev, { id: uid(), expr, visible: true }]);
+          if (typeof input.xMin === "number" && typeof input.xMax === "number" && input.xMin < input.xMax) {
+            setXMin(input.xMin);
+            setXMax(input.xMax);
+          }
+          setActiveTab("graph");
+          return `Plotted "${expr}" on the graphing tab.`;
+        }
+        case "set_subject_priority": {
+          const query = (input.subjectName || "").trim().toLowerCase();
+          const priority = Math.min(5, Math.max(1, Math.round(Number(input.priority) || 3)));
+          const match = subjects.find((s) => s.name.toLowerCase().includes(query));
+          if (!match) return `Couldn't find a subject matching "${input.subjectName}". No change made.`;
+          setSubjectPriority(match.id, priority);
+          return `Set "${match.name}" priority to ${priority}/5 — check the Plan tab for the updated schedule.`;
+        }
+        case "set_slots_per_day": {
+          const slots = Math.min(6, Math.max(1, Math.round(Number(input.slotsPerDay) || slotsPerDay)));
+          setSlotsPerDay(slots);
+          return `Set study sessions per day to ${slots}.`;
+        }
+        default:
+          return `Unknown tool "${name}".`;
+      }
+    } catch (e) {
+      return `Tool "${name}" failed: ${e.message || "unknown error"}`;
+    }
+  };
+
+  const callVApi = async (apiMessages, systemPrompt) => {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: apiMessages,
+        tools: V_TOOLS,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("V API error:", data);
+      throw new Error(data?.error?.message || `Request failed (${response.status})`);
+    }
+    return data.content || [];
+  };
+
   const sendChatMessage = async () => {
     const text = chatInput.trim();
     if (!text || chatLoading) return;
@@ -732,52 +902,57 @@ export default function StudyLedger() {
     setChatInput("");
     setChatLoading(true);
     try {
-      const systemPrompt =
+      const toolNote =
         chatLang === "my"
+          ? " သင့်တွင် tool အနည်းငယ်ရှိသည်— site ၏ အရောင်ဇာတ်ကွက်ကို အသင့်အတင့်ချိန်ညှိပေးနိုင်သည် (တောင်းဆိုမှသာ၊ တစ်ခါတည်း အပြောင်းအလဲကြီးမလုပ်ပါနှင့်), graph ဆွဲပေးနိုင်သည်, subject တစ်ခု၏ schedule priority ကို ပြောင်းပေးနိုင်သည်, နှင့် တစ်နေ့လျှင် study session အရေအတွက်ကို ချိန်ညှိပေးနိုင်သည်။ လိုအပ်မှသာ tool ကိုသုံးပါ။"
+          : " You also have a few tools: you can retheme the site (small, tasteful adjustments only, and only when it's asked for or clearly helpful — never a total redesign unprompted), plot a function on the graph tab, change a subject's schedule priority, and change how many study sessions happen per day. Only call a tool when it genuinely serves the request.";
+
+      const systemPrompt =
+        (chatLang === "my"
           ? "You are V, a friendly, patient AI study helper for students preparing for exams. Explain topics from Mathematics, Physics, Chemistry, and other school subjects in clear, detailed, step-by-step terms with examples, and encourage the student. Always respond in Burmese (Myanmar script), even if the student writes in English. Use markdown formatting to structure your answers (headings with #, **bold** for key terms, - or 1. for lists). Whenever you write a mathematical formula or equation, format it in LaTeX: wrap inline math in single dollar signs like $x^2 + 1$ and standalone/display equations in double dollar signs like $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$."
-          : "You are V, a friendly, patient AI study helper for students preparing for exams. Explain topics from Mathematics, Physics, Chemistry, and other school subjects in clear, detailed, step-by-step terms with examples, and encourage the student. Always respond in English, even if the student writes in Burmese. Use markdown formatting to structure your answers (headings with #, **bold** for key terms, - or 1. for lists). Whenever you write a mathematical formula or equation, format it in LaTeX: wrap inline math in single dollar signs like $x^2 + 1$ and standalone/display equations in double dollar signs like $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$.";
+          : "You are V, a friendly, patient AI study helper for students preparing for exams. Explain topics from Mathematics, Physics, Chemistry, and other school subjects in clear, detailed, step-by-step terms with examples, and encourage the student. Always respond in English, even if the student writes in Burmese. Use markdown formatting to structure your answers (headings with #, **bold** for key terms, - or 1. for lists). Whenever you write a mathematical formula or equation, format it in LaTeX: wrap inline math in single dollar signs like $x^2 + 1$ and standalone/display equations in double dollar signs like $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$.") +
+        toolNote;
 
       const firstUserIdx = newMessages.findIndex((m) => m.role === "user");
-      const apiMessages = newMessages
+      let apiMessages = newMessages
         .slice(firstUserIdx === -1 ? 0 : firstUserIdx)
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const payload = {
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: apiMessages,
-      };
-
-      let response;
-      try {
-        response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (response.status === 404) throw new Error("no-proxy");
-      } catch (e) {
-        response = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      }
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        console.error("V API error:", data);
-        throw new Error(data?.error?.message || `Request failed (${response.status})`);
-      }
-
-      const reply =
-        (data.content || [])
-          .map((block) => block.text || "")
+      let finalText = "";
+      // Agentic loop: Gemini can ask to call tools, we run them locally and
+      // hand the results back, up to a few rounds, until it settles on text.
+      for (let round = 0; round < 4; round++) {
+        const blocks = await callVApi(apiMessages, systemPrompt);
+        const toolUses = blocks.filter((b) => b.type === "tool_use");
+        const textPart = blocks
+          .filter((b) => b.type === "text")
+          .map((b) => b.text || "")
           .join("\n")
-          .trim() || "Sorry, I couldn't come up with a response — try asking again.";
-      setChatMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+          .trim();
+        if (textPart) finalText = finalText ? `${finalText}\n${textPart}` : textPart;
+
+        if (toolUses.length === 0) break;
+
+        apiMessages = [
+          ...apiMessages,
+          {
+            role: "assistant",
+            content: toolUses.map((tu) => ({ type: "tool_use", id: tu.id, name: tu.name, input: tu.input })),
+          },
+        ];
+        const toolResults = toolUses.map((tu) => ({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          name: tu.name,
+          content: applyToolCall(tu.name, tu.input),
+        }));
+        apiMessages = [...apiMessages, { role: "user", content: toolResults }];
+      }
+
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: finalText || "Done!" },
+      ]);
     } catch (e) {
       console.error("V chat error:", e);
       setChatMessages((prev) => [
@@ -819,6 +994,7 @@ export default function StudyLedger() {
         name: s.name,
         daysLeft: Math.max(daysUntil(s.examDate) ?? 0, 0),
         queue: s.chapters.filter((c) => !c.done).map((c) => c.title),
+        priority: s.priority || 3,
       }))
       .filter((s) => s.queue.length > 0 && s.daysLeft > 0);
 
@@ -830,7 +1006,9 @@ export default function StudyLedger() {
     );
     const weight = {};
     active.forEach((s) => {
-      weight[s.id] = s.queue.length / s.daysLeft;
+      // priority 3 is neutral (no change to the old behavior); 1..5 scales
+      // the subject's urgency up or down from there.
+      weight[s.id] = (s.queue.length / s.daysLeft) * (s.priority / 3);
     });
     const accumulator = {};
     active.forEach((s) => (accumulator[s.id] = 0));
@@ -1094,6 +1272,19 @@ export default function StudyLedger() {
                         </div>
                         <span className="font-mono text-xs text-stone-400">{pct}%</span>
                       </div>
+                      <select
+                        value={s.priority || 3}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setSubjectPriority(s.id, Number(e.target.value))}
+                        className="hidden sm:block bg-transparent border border-stone-700 rounded-sm text-xs font-mono px-1 py-1 text-stone-400"
+                        title="Schedule priority (used to weight the study plan)"
+                      >
+                        {[1, 2, 3, 4, 5].map((p) => (
+                          <option key={p} value={p} className="bg-slate-900">
+                            P{p}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

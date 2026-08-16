@@ -1,41 +1,100 @@
-const MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"];
-const RETRIES_PER_MODEL = 2;
+
+const MODEL = "grok-4.6";
+const RETRIES = 2;
 const RETRY_DELAY_MS = 600;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function callGeminiWithRetries(apiKey, body) {
+
+function toGrokMessages(messages) {
+  const out = [];
+
+  for (const m of messages) {
+    if (typeof m.content === "string") {
+      out.push({ role: m.role, content: m.content });
+      continue;
+    }
+
+    const blocks = Array.isArray(m.content) ? m.content : [];
+    const toolResults = blocks.filter((b) => b.type === "tool_result");
+    const textBlocks = blocks.filter((b) => b.type === "text");
+    const toolUseBlocks = blocks.filter((b) => b.type === "tool_use");
+
+    
+    for (const tr of toolResults) {
+      out.push({
+        role: "tool",
+        tool_call_id: tr.tool_use_id,
+        content: typeof tr.content === "string" ? tr.content : JSON.stringify(tr.content),
+      });
+    }
+
+    // Text and/or tool_use blocks become one assistant/user message.
+    if (textBlocks.length > 0 || toolUseBlocks.length > 0) {
+      const msg = { role: m.role === "assistant" ? "assistant" : "user" };
+      const text = textBlocks.map((b) => b.text || "").join("\n");
+
+      if (toolUseBlocks.length > 0) {
+        msg.content = text || null;
+        msg.tool_calls = toolUseBlocks.map((tu) => ({
+          id: tu.id,
+          type: "function",
+          function: { name: tu.name, arguments: JSON.stringify(tu.input || {}) },
+        }));
+      } else {
+        msg.content = text;
+      }
+      out.push(msg);
+    }
+  }
+
+  return out;
+}
+
+// Anthropic-style tool schema (name/description/input_schema) -> OpenAI's
+// function-calling schema (name/description/parameters). Both use plain
+// JSON Schema for the parameters, so this is a direct field rename.
+function toGrokTools(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  return tools.map((tl) => ({
+    type: "function",
+    function: {
+      name: tl.name,
+      description: tl.description,
+      parameters: tl.input_schema,
+    },
+  }));
+}
+
+async function callGrokWithRetries(apiKey, body) {
   let lastError = null;
 
-  for (const model of MODEL_FALLBACKS) {
-    for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt++) {
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      );
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
 
-      if (geminiRes.ok) {
-        return { geminiRes, data: await geminiRes.json(), model };
-      }
-
-      const data = await geminiRes.json().catch(() => ({}));
-      lastError = { geminiRes, data, model };
-
-      // Only 503 (overloaded) is worth retrying / falling back on. Anything
-      // else (bad request, auth, etc.) would fail the same way every time.
-      if (geminiRes.status !== 503) {
-        return lastError;
-      }
-
-      if (attempt < RETRIES_PER_MODEL) {
-        await sleep(RETRY_DELAY_MS * (attempt + 1));
-      }
+    if (grokRes.ok) {
+      return { grokRes, data: await grokRes.json() };
     }
-    
+
+    const data = await grokRes.json().catch(() => ({}));
+    lastError = { grokRes, data };
+
+    // Only rate-limit/overload responses are worth retrying — anything else
+    // (bad request, auth, etc.) will fail the same way every time.
+    if (grokRes.status !== 429 && grokRes.status !== 503) {
+      return lastError;
+    }
+
+    if (attempt < RETRIES) {
+      await sleep(RETRY_DELAY_MS * (attempt + 1));
+    }
   }
 
   return lastError;
@@ -47,111 +106,69 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) {
     res.status(500).json({
       error: {
         message:
-          "GEMINI_API_KEY is not set on the server. Add it in Vercel → Settings → Environment Variables, then redeploy.",
+          "XAI_API_KEY is not set on the server. Add it in Vercel -> Settings -> Environment Variables, then redeploy.",
       },
     });
     return;
   }
 
-  const { system, messages, tools } = req.body || {};
+  const { system, messages, tools, max_tokens } = req.body || {};
   if (!messages) {
     res.status(400).json({ error: { message: "Missing 'messages' in request body." } });
     return;
   }
 
-  
-  const contents = messages.map((m) => {
-    if (typeof m.content === "string") {
-      return { role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] };
-    }
-
-    const blocks = Array.isArray(m.content) ? m.content : [];
-    const hasFunctionResponse = blocks.some((b) => b.type === "tool_result");
-
-    const parts = blocks.map((block) => {
-      if (block.type === "tool_use") {
-        return { functionCall: { name: block.name, args: block.input || {} } };
-      }
-      if (block.type === "tool_result") {
-        return {
-          functionResponse: {
-            name: block.name || "tool",
-            response: {
-              result: typeof block.content === "string" ? block.content : JSON.stringify(block.content),
-            },
-          },
-        };
-      }
-      return { text: block.text || "" };
-    });
-
-
-    const role = hasFunctionResponse ? "user" : m.role === "assistant" ? "model" : "user";
-    return { role, parts };
-  });
-
- 
-  const geminiTools =
-    Array.isArray(tools) && tools.length > 0
-      ? [
-          {
-            functionDeclarations: tools.map((tl) => ({
-              name: tl.name,
-              description: tl.description,
-              parameters: tl.input_schema,
-            })),
-          },
-        ]
-      : undefined;
+  const grokMessages = [
+    ...(system ? [{ role: "system", content: system }] : []),
+    ...toGrokMessages(messages),
+  ];
+  const grokTools = toGrokTools(tools);
 
   try {
-    const { geminiRes, data, model } = await callGeminiWithRetries(apiKey, {
-      contents,
-      systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-      tools: geminiTools,
-      generationConfig: { maxOutputTokens: 1000 },
+    const { grokRes, data } = await callGrokWithRetries(apiKey, {
+      model: MODEL,
+      messages: grokMessages,
+      tools: grokTools,
+      max_tokens: max_tokens || 1000,
     });
 
-    if (!geminiRes.ok) {
-      console.error(`Gemini error (model: ${model}):`, data);
+    if (!grokRes.ok) {
+      console.error("Grok error:", data);
       const friendly =
-        geminiRes.status === 503
-          ? "V's model is under heavy load right now on Google's side. Please try again in a moment."
-          : data?.error?.message || "Gemini request failed";
-      res.status(geminiRes.status).json({ error: { message: friendly } });
+        grokRes.status === 429 || grokRes.status === 503
+          ? "V's model is under heavy load right now. Please try again in a moment."
+          : data?.error?.message || "Grok request failed";
+      res.status(grokRes.status).json({ error: { message: friendly } });
       return;
     }
 
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    let callId = 0;
-    const content = parts
-      .map((p) => {
-        if (p.functionCall) {
-          callId += 1;
-          return {
-            type: "tool_use",
-            id: `call_${Date.now()}_${callId}`,
-            name: p.functionCall.name,
-            input: p.functionCall.args || {},
-          };
-        }
-        if (typeof p.text === "string" && p.text) {
-          return { type: "text", text: p.text };
-        }
-        return null;
-      })
-      .filter(Boolean);
+    const message = data?.choices?.[0]?.message || {};
+    const content = [];
 
-   
+    if (message.content) {
+      content.push({ type: "text", text: message.content });
+    }
+    if (Array.isArray(message.tool_calls)) {
+      for (const tc of message.tool_calls) {
+        let input = {};
+        try {
+          input = JSON.parse(tc.function.arguments || "{}");
+        } catch (e) {
+          console.error("Failed to parse tool call arguments:", tc.function.arguments);
+        }
+        content.push({ type: "tool_use", id: tc.id, name: tc.function.name, input });
+      }
+    }
+
+    // Normalize to the shape App.jsx already parses.
     res.status(200).json({ content });
   } catch (err) {
-    console.error("Gemini proxy error:", err);
-    res.status(500).json({ error: { message: "Server error contacting Gemini." } });
+    console.error("Grok proxy error:", err);
+    res.status(500).json({ error: { message: "Server error contacting Grok." } });
   }
 }
-

@@ -566,6 +566,7 @@ export default function StudyLedger() {
           if (data.language) setLanguage(data.language);
           if (data.busyDays) setBusyDays(data.busyDays);
           if (data.vIconColor) setVIconColor(data.vIconColor);
+          if (data.chatMessages) setChatMessages(data.chatMessages);
         }
       } catch (e) {
         
@@ -590,6 +591,7 @@ export default function StudyLedger() {
             language,
             busyDays,
             vIconColor,
+            chatMessages,
           })
         );
         setSaveError(!result);
@@ -607,6 +609,7 @@ export default function StudyLedger() {
     language,
     busyDays,
     vIconColor,
+    chatMessages,
     loaded,
   ]);
 

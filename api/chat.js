@@ -1,4 +1,47 @@
 
+const MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"];
+const RETRIES_PER_MODEL = 2;
+const RETRY_DELAY_MS = 600;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callGeminiWithRetries(apiKey, body) {
+  let lastError = null;
+
+  for (const model of MODEL_FALLBACKS) {
+    for (let attempt = 0; attempt <= RETRIES_PER_MODEL; attempt++) {
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (geminiRes.ok) {
+        return { geminiRes, data: await geminiRes.json(), model };
+      }
+
+      const data = await geminiRes.json().catch(() => ({}));
+      lastError = { geminiRes, data, model };
+
+      // Only 503 (overloaded) is worth retrying / falling back on. Anything
+      // else (bad request, auth, etc.) would fail the same way every time.
+      if (geminiRes.status !== 503) {
+        return lastError;
+      }
+
+      if (attempt < RETRIES_PER_MODEL) {
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+      }
+    }
+    // Exhausted retries on this model while overloaded — try the next model.
+  }
+
+  return lastError;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: { message: "Method not allowed" } });
@@ -70,25 +113,20 @@ export default async function handler(req, res) {
       : undefined;
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-          tools: geminiTools,
-          generationConfig: { maxOutputTokens: 1000 },
-        }),
-      }
-    );
-
-    const data = await geminiRes.json();
+    const { geminiRes, data, model } = await callGeminiWithRetries(apiKey, {
+      contents,
+      systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+      tools: geminiTools,
+      generationConfig: { maxOutputTokens: 1000 },
+    });
 
     if (!geminiRes.ok) {
-      console.error("Gemini error:", data);
-      res.status(geminiRes.status).json({ error: { message: data?.error?.message || "Gemini request failed" } });
+      console.error(`Gemini error (model: ${model}):`, data);
+      const friendly =
+        geminiRes.status === 503
+          ? "V's model is under heavy load right now on Google's side. Please try again in a moment."
+          : data?.error?.message || "Gemini request failed";
+      res.status(geminiRes.status).json({ error: { message: friendly } });
       return;
     }
 
@@ -119,3 +157,4 @@ export default async function handler(req, res) {
     res.status(500).json({ error: { message: "Server error contacting Gemini." } });
   }
 }
+

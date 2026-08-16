@@ -1,4 +1,3 @@
-
 const MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"];
 const RETRIES_PER_MODEL = 2;
 const RETRY_DELAY_MS = 600;
@@ -36,7 +35,7 @@ async function callGeminiWithRetries(apiKey, body) {
         await sleep(RETRY_DELAY_MS * (attempt + 1));
       }
     }
-    // Exhausted retries on this model while overloaded — try the next model.
+    
   }
 
   return lastError;
@@ -65,7 +64,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Anthropic-style {role, content} -> Gemini-style {role, parts}.
+  
   const contents = messages.map((m) => {
     if (typeof m.content === "string") {
       return { role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] };
@@ -91,14 +90,12 @@ export default async function handler(req, res) {
       return { text: block.text || "" };
     });
 
-    // Gemini expects functionResponse parts to sit on a "function"-role turn.
-    const role = hasFunctionResponse ? "function" : m.role === "assistant" ? "model" : "user";
+
+    const role = hasFunctionResponse ? "user" : m.role === "assistant" ? "model" : "user";
     return { role, parts };
   });
 
-  // Anthropic-style tool schema (name/description/input_schema) maps almost
-  // directly onto Gemini's functionDeclarations (name/description/parameters) —
-  // both use plain JSON Schema.
+ 
   const geminiTools =
     Array.isArray(tools) && tools.length > 0
       ? [
@@ -150,7 +147,7 @@ export default async function handler(req, res) {
       })
       .filter(Boolean);
 
-    // Normalize to the shape study-planner code already parses.
+   
     res.status(200).json({ content });
   } catch (err) {
     console.error("Gemini proxy error:", err);

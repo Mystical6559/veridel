@@ -1,34 +1,4 @@
-// Vercel serverless function: POST /api/chat
-// Primary: Google Gemini (free tier). Backup: Groq (also free tier), used
-// automatically if Gemini fails for any reason — out of quota, rate
-// limited, or temporarily overloaded. The frontend (App.jsx) never knows
-// which provider actually answered; it always gets back the same
-// Anthropic-style shape it already parses.
-//
-// Request body (from the frontend):
-//   {
-//     system: "...",
-//     messages: [{ role: "user"|"assistant", content: string | Block[] }],
-//     tools: [{ name, description, input_schema }]   // Anthropic-style, optional
-//   }
-//
-// Block shapes inside a message's `content` array:
-//   { type: "text", text }
-//   { type: "tool_use", id, name, input }                 (assistant called a tool)
-//   { type: "tool_result", tool_use_id, name, content }   (result of that call)
-//
-// Response shape (always, regardless of which provider ran):
-//   { content: [{ type: "text", text }] }
-//   { content: [{ type: "tool_use", id, name, input }, ...] }
-//
-// Setup:
-// 1. Gemini (primary): get a free key at https://aistudio.google.com/apikey
-//      Vercel -> Settings -> Environment Variables -> GEMINI_API_KEY = AIza...
-// 2. Groq (backup): get a free key at https://console.groq.com/keys
-//      (email/Google sign-up, no card, takes ~30 seconds)
-//      Vercel -> Settings -> Environment Variables -> GROQ_API_KEY = gsk_...
-// 3. Redeploy. Either key alone is enough for the site to work; having both
-//    is what gives you the automatic backup.
+
 
 const GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"];
 const GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
@@ -37,9 +7,7 @@ const RETRY_DELAY_MS = 600;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/* ------------------------------------------------------------------ */
-/* Gemini: Anthropic-style <-> Gemini-style conversion                 */
-/* ------------------------------------------------------------------ */
+
 
 function toGeminiContents(messages) {
   return messages.map((m) => {
@@ -67,8 +35,7 @@ function toGeminiContents(messages) {
       return { text: block.text || "" };
     });
 
-    // Gemini has no separate "function" role — functionResponse parts sit
-    // on a "user"-role turn.
+
     const role = hasFunctionResponse ? "user" : m.role === "assistant" ? "model" : "user";
     return { role, parts };
   });
@@ -108,8 +75,7 @@ async function callGeminiWithRetries(apiKey, body) {
       const data = await geminiRes.json().catch(() => ({}));
       lastError = { geminiRes, data, model };
 
-      // Only 503 (overloaded) is worth retrying/falling back to a different
-      // Gemini model for. Anything else fails the same way every time.
+     
       if (geminiRes.status !== 503) {
         return lastError;
       }
@@ -160,11 +126,7 @@ async function tryGemini(apiKey, { system, messages, tools }) {
   return { ok: true, content };
 }
 
-/* ------------------------------------------------------------------ */
-/* Groq: Anthropic-style <-> OpenAI-compatible conversion              */
-/* (Groq's API is OpenAI-compatible, so this shape is reused as-is    */
-/* for any other OpenAI-compatible backup you might add later.)       */
-/* ------------------------------------------------------------------ */
+
 
 function toOpenAIMessages(messages) {
   const out = [];
@@ -285,9 +247,7 @@ async function tryGroq(apiKey, { system, messages, tools, max_tokens }) {
   return { ok: true, content };
 }
 
-/* ------------------------------------------------------------------ */
-/* Handler: Gemini first, Groq as automatic backup                     */
-/* ------------------------------------------------------------------ */
+
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -314,7 +274,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 1. Try Gemini first, if configured.
+ 
   if (geminiKey) {
     try {
       const result = await tryGemini(geminiKey, { system, messages, tools });
@@ -328,7 +288,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // 2. Fall back to Groq if Gemini wasn't configured, or just failed.
+ 
   if (groqKey) {
     try {
       const result = await tryGroq(groqKey, { system, messages, tools, max_tokens });
@@ -349,7 +309,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // Gemini failed and no Groq key is configured to fall back to.
+ 
   res.status(502).json({
     error: {
       message: "V's model is unavailable right now, and no backup provider is configured.",

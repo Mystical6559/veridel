@@ -157,8 +157,6 @@ function Latex({ tex, display = false, className = "" }) {
   }
 }
 
-// Best-effort conversion of a plain math expression (as typed into the
-// graphing calculator) into LaTeX, e.g. "sin(x)^2 + sqrt(x)" -> "\sin(x)^{2} + \sqrt{x}"
 function exprToLatex(expr) {
   let s = expr;
   s = s.replace(/sqrt\(([^()]*)\)/g, "\\sqrt{$1}");
@@ -182,8 +180,6 @@ function exprToLatex(expr) {
   return s;
 }
 
-// Splits chat text on $$...$$ (block) and $...$ (inline) LaTeX delimiters
-// so plain text and math can be rendered separately.
 function parseLatexSegments(text) {
   const parts = text.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g).filter((p) => p !== "");
   return parts.map((part, i) => {
@@ -197,7 +193,6 @@ function parseLatexSegments(text) {
   });
 }
 
-// Renders **bold**, *italic*/_italic_ and `code` spans within a plain-text run.
 function renderInlineMarkdown(text, keyPrefix) {
   const parts = text
     .split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|_[^_]+_)/g)
@@ -229,7 +224,7 @@ function renderInlineMarkdown(text, keyPrefix) {
   });
 }
 
-// Runs LaTeX segmentation, then inline markdown, over one block's raw text.
+
 function renderInlineContent(content, keyPrefix) {
   return parseLatexSegments(content).map((seg) => {
     if (seg.type !== "text") {
@@ -250,8 +245,6 @@ function renderInlineContent(content, keyPrefix) {
   });
 }
 
-// Splits full message text into block-level markdown units: headings,
-// fenced code blocks, bullet/numbered lists, and paragraphs.
 function parseMarkdownBlocks(text) {
   const lines = text.split("\n");
   const blocks = [];
@@ -392,16 +385,13 @@ function shadeHex(hex, amount) {
   }
 }
 
-// Uses the Claude-artifact storage API when it's present (previewing inside
-// Claude), and falls back to plain localStorage everywhere else (a real
-// deployed site), so the same file works in both places.
 async function storageGet(key) {
   try {
     if (typeof window !== "undefined" && window.storage && typeof window.storage.get === "function") {
       return await window.storage.get(key);
     }
   } catch (e) {
-    // fall through to localStorage
+    
   }
   try {
     const raw = localStorage.getItem(key);
@@ -417,7 +407,7 @@ async function storageSet(key, value) {
       return await window.storage.set(key, value);
     }
   } catch (e) {
-    // fall through to localStorage
+    
   }
   try {
     localStorage.setItem(key, value);
@@ -491,7 +481,7 @@ export default function StudyLedger() {
           if (data.vIconColor) setVIconColor(data.vIconColor);
         }
       } catch (e) {
-        // no saved data yet, that's fine
+        
       }
       setLoaded(true);
     })();
@@ -675,7 +665,7 @@ export default function StudyLedger() {
       }
       setTimeout(() => ctx.close(), 2200);
     } catch (e) {
-      // Web Audio not available — fail silently.
+      
     }
   };
 
@@ -747,9 +737,6 @@ export default function StudyLedger() {
           ? "You are V, a friendly, patient AI study helper for students preparing for exams. Explain topics from Mathematics, Physics, Chemistry, and other school subjects in clear, detailed, step-by-step terms with examples, and encourage the student. Always respond in Burmese (Myanmar script), even if the student writes in English. Use markdown formatting to structure your answers (headings with #, **bold** for key terms, - or 1. for lists). Whenever you write a mathematical formula or equation, format it in LaTeX: wrap inline math in single dollar signs like $x^2 + 1$ and standalone/display equations in double dollar signs like $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$."
           : "You are V, a friendly, patient AI study helper for students preparing for exams. Explain topics from Mathematics, Physics, Chemistry, and other school subjects in clear, detailed, step-by-step terms with examples, and encourage the student. Always respond in English, even if the student writes in Burmese. Use markdown formatting to structure your answers (headings with #, **bold** for key terms, - or 1. for lists). Whenever you write a mathematical formula or equation, format it in LaTeX: wrap inline math in single dollar signs like $x^2 + 1$ and standalone/display equations in double dollar signs like $$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$.";
 
-      // The API requires the conversation to start with a "user" message —
-      // our seeded welcome message from V is "assistant", so drop everything
-      // before the first real user message when building the request.
       const firstUserIdx = newMessages.findIndex((m) => m.role === "user");
       const apiMessages = newMessages
         .slice(firstUserIdx === -1 ? 0 : firstUserIdx)
@@ -762,10 +749,6 @@ export default function StudyLedger() {
         messages: apiMessages,
       };
 
-      // Prefer a same-origin backend proxy (e.g. /api/chat on a real
-      // deployment, which keeps your Anthropic API key server-side).
-      // Falls back to calling Anthropic directly, which only succeeds
-      // when previewing inside a Claude.ai artifact.
       let response;
       try {
         response = await fetch("/api/chat", {
